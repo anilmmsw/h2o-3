@@ -250,7 +250,7 @@ public class DTree extends Iced {
           switch( _equal ) {
           case 0:  // Ranged split; know something about the left & right sides
             if (_nasplit != DHistogram.NASplitDir.NAvsREST) {
-              if (h._vals[5*_bin] == 0)
+              if (h._vals[h._vals_dim*_bin] == 0)
                 throw H2O.unimpl(); // Here I should walk up & down same as split() above.
             }
             assert _bs==null : "splat not defined for BitSet splits";
@@ -543,7 +543,7 @@ public class DTree extends Iced {
       for(int way = 0; way <2; way++ ) { // left / right
         // Create children histograms, not yet populated, but the ranges are set
         Constraints ncs = cs != null ? _split.nextLevelConstraints(cs, way, _splat, _tree._parms) : null;
-        DHistogram nhists[] = _split.nextLevelHistos(hs, way,_splat, _tree._parms, ncs != null ? ncs._min : 0, ncs != null ? ncs._max : 0); //maintains the full range for NAvsREST
+        DHistogram nhists[] = _split.nextLevelHistos(hs, way,_splat, _tree._parms, ncs != null ? ncs._min : Double.NaN, ncs != null ? ncs._max : Double.NaN); //maintains the full range for NAvsREST
         assert nhists==null || nhists.length==_tree._ncols;
         // Assign a new (yet undecided) node to each child, and connect this (the parent) decided node and the newly made histograms to it
         _nids[way] = nhists == null ? ScoreBuildHistogram.UNDECIDED_CHILD_NODE_ID : makeUndecidedNode(nhists,ncs)._nid;
@@ -803,6 +803,7 @@ public class DTree extends Iced {
     // (for an ordered predictor), or sorted by the mean response (for an
     // unordered predictor, i.e. categorical predictor).
     double[]   vals =   hs._vals;
+    final int vals_dim = hs._vals_dim; 
     int idxs[] = null;          // and a reverse index mapping
 
     // For categorical (unordered) predictors, sort the bins by average
@@ -817,15 +818,17 @@ public class DTree extends Iced {
       ArrayUtils.sort(idxs, avgs);
       // Fill with sorted data.  Makes a copy, so the original data remains in
       // its original order.
-      vals = MemoryManager.malloc8d(5*nbins);
+      vals = MemoryManager.malloc8d(vals_dim*nbins);
 
       for( int i=0; i<nbins; i++ ) {
         int id = idxs[i];
-        vals[5*i+0] = hs._vals[5*id+0];
-        vals[5*i+1] = hs._vals[5*id+1];
-        vals[5*i+2] = hs._vals[5*id+2];
-        vals[5*i+3] = hs._vals[5*id+3];
-        vals[5*i+4] = hs._vals[5*id+4];
+        vals[vals_dim*i+0] = hs._vals[vals_dim*id+0];
+        vals[vals_dim*i+1] = hs._vals[vals_dim*id+1];
+        vals[vals_dim*i+2] = hs._vals[vals_dim*id+2];
+        if (vals_dim == 5) {
+          vals[vals_dim * i + 3] = hs._vals[vals_dim * id + 3];
+          vals[vals_dim * i + 4] = hs._vals[vals_dim * id + 4];
+        }
 //        Log.info(vals[3*i] + " obs have avg response [" + i + "]=" + avgs[id]);
       }
     }
@@ -834,22 +837,24 @@ public class DTree extends Iced {
     double   wlo[] = MemoryManager.malloc8d(nbins+1);
     double  wYlo[] = MemoryManager.malloc8d(nbins+1);
     double wYYlo[] = MemoryManager.malloc8d(nbins+1);
-    double pr1lo[] = MemoryManager.malloc8d(nbins+1);
-    double pr2lo[] = MemoryManager.malloc8d(nbins+1);
+    double pr1lo[] = vals_dim == 5 ? MemoryManager.malloc8d(nbins+1) : null;
+    double pr2lo[] = vals_dim == 5 ? MemoryManager.malloc8d(nbins+1) : null;
     for( int b=1; b<=nbins; b++ ) {
-      int id = 5*(b-1);
+      int id = vals_dim*(b-1);
       double n0 =   wlo[b-1], n1 = vals[id+0];
       if( n0==0 && n1==0 )
         continue;
       double m0 =  wYlo[b-1], m1 = vals[id+1];
       double s0 = wYYlo[b-1], s1 = vals[id+2];
-      double p10 = pr1lo[b-1], p11 = vals[id+3];
-      double p20 = pr2lo[b-1], p21 = vals[id+4];
       wlo[b] = n0+n1;
       wYlo[b] = m0+m1;
       wYYlo[b] = s0+s1;
-      pr1lo[b] = p10+p11;
-      pr2lo[b] = p20+p21;
+      if (vals_dim == 5) {
+        double p10 = pr1lo[b - 1], p11 = vals[id + 3];
+        double p20 = pr2lo[b - 1], p21 = vals[id + 4];
+        pr1lo[b] = p10 + p11;
+        pr2lo[b] = p20 + p21;
+      }
     }
     double wNA = hs.wNA();
     double tot = wlo[nbins] + wNA; //total number of (weighted) rows
@@ -876,18 +881,20 @@ public class DTree extends Iced {
     double pr1hi[] = MemoryManager.malloc8d(nbins+1);
     double pr2hi[] = MemoryManager.malloc8d(nbins+1);
     for( int b=nbins-1; b>=0; b-- ) {
-      double n0 =   whi[b+1], n1 = vals[5*b];
+      double n0 =   whi[b+1], n1 = vals[vals_dim*b];
       if( n0==0 && n1==0 )
         continue;
-      double m0 =  wYhi[b+1], m1 = vals[5*b+1];
-      double s0 = wYYhi[b+1], s1 = vals[5*b+2];
-      double p10 = pr1hi[b+1], p11 = vals[5*b+3];
-      double p20 = pr2hi[b+1], p21 = vals[5*b+4];
+      double m0 =  wYhi[b+1], m1 = vals[vals_dim*b+1];
+      double s0 = wYYhi[b+1], s1 = vals[vals_dim*b+2];
       whi[b] = n0+n1;
       wYhi[b] = m0+m1;
       wYYhi[b] = s0+s1;
-      pr1hi[b] = p10+p11;
-      pr2hi[b] = p20+p21;
+      if (vals_dim == 5) {
+        double p10 = pr1hi[b + 1], p11 = vals[vals_dim * b + 3];
+        double p20 = pr2hi[b + 1], p21 = vals[vals_dim * b + 4];
+        pr1hi[b] = p10 + p11;
+        pr2hi[b] = p20 + p21;
+      }
       assert MathUtils.compare(wlo[b]+ whi[b]+wNA,tot,1e-5,1e-5);
     }
 
@@ -928,7 +935,7 @@ public class DTree extends Iced {
     int best=0;                         // The no-split
     byte equal=0;                       // Ranged check
     for( int b=1; b<=nbins-1; b++ ) {
-      if( vals[5*b] == 0 ) continue; // Ignore empty splits
+      if( vals[vals_dim*b] == 0 ) continue; // Ignore empty splits
       if( wlo[b]+wNA < min_rows ) continue;
       if( whi[b]+wNA < min_rows ) break; // w1 shrinks at the higher bin#s, so if it fails once it fails always
       // We're making an unbiased estimator, so that MSE==Var.
